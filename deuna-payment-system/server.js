@@ -7,12 +7,19 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const MONGODB_URI = 'mongodb+srv://avillacres:1234AZ@cluster0.ppg8sv5.mongodb.net/';
+// Configuración de conexión a MongoDB Atlas con base de datos personalizada
+const MONGODB_URI = 'mongodb+srv://SrJCBM:bdd2025@cluster0.tjvfmrk.mongodb.net/bancario?retryWrites=true&w=majority';
+
+// Si quieres usar una colección específica para cada modelo, puedes agregar la opción { collection: 'nombre_coleccion' } en cada esquema
+// Ejemplo:
+// const userSchema = new mongoose.Schema({ ... }, { collection: 'usuarios' });
 
 mongoose.connect(MONGODB_URI)
     .then(() => console.log('Conectado a MongoDB'))
     .catch(err => console.error('Error conectando a MongoDB:', err));
 
+
+// Todos los modelos usan la colección 'sistema'
 const userSchema = new mongoose.Schema({
     userId: { type: String, required: true, unique: true },
     name: { type: String, required: true },
@@ -20,7 +27,7 @@ const userSchema = new mongoose.Schema({
     balance: { type: Number, default: 0, min: 0 },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
-});
+}, { collection: 'sistema' });
 
 const merchantSchema = new mongoose.Schema({
     merchantId: { type: String, required: true, unique: true },
@@ -29,7 +36,7 @@ const merchantSchema = new mongoose.Schema({
     balance: { type: Number, default: 0 },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now }
-});
+}, { collection: 'sistema' });
 
 const orderSchema = new mongoose.Schema({
     orderId: { type: String, required: true, unique: true },
@@ -46,7 +53,7 @@ const orderSchema = new mongoose.Schema({
     paymentId: { type: String, default: null },
     createdAt: { type: Date, default: Date.now },
     expiresAt: { type: Date, required: true }
-});
+}, { collection: 'sistema' });
 
 const paymentSchema = new mongoose.Schema({
     paymentId: { type: String, required: true, unique: true },
@@ -62,14 +69,14 @@ const paymentSchema = new mongoose.Schema({
         default: 'completed'
     },
     processedAt: { type: Date, default: Date.now }
-});
+}, { collection: 'sistema' });
 
 const transactionSchema = new mongoose.Schema({
     transactionId: { type: String, required: true, unique: true },
     userId: { type: String, required: true },
     type: {
         type: String,
-        enum: ['recharge', 'payment', 'refund'],
+        enum: ['recharge', 'payment', 'refund', 'transfer'],
         required: true
     },
     amount: { type: Number, required: true },
@@ -78,14 +85,14 @@ const transactionSchema = new mongoose.Schema({
     description: { type: String },
     relatedId: { type: String },
     createdAt: { type: Date, default: Date.now }
-});
+}, { collection: 'sistema' });
 
 const bankSchema = new mongoose.Schema({
     bankId: { type: String, required: true, unique: true },
     name: { type: String, required: true },
     balance: { type: Number, required: true, min: 0 },
     updatedAt: { type: Date, default: Date.now }
-});
+}, { collection: 'sistema' });
 
 const bankTransactionSchema = new mongoose.Schema({
     bankTransactionId: { type: String, required: true, unique: true },
@@ -100,7 +107,7 @@ const bankTransactionSchema = new mongoose.Schema({
     description: { type: String },
     relatedUserId: { type: String },
     createdAt: { type: Date, default: Date.now }
-});
+}, { collection: 'sistema' });
 
 const Bank = mongoose.model('Bank', bankSchema);
 const BankTransaction = mongoose.model('BankTransaction', bankTransactionSchema);
@@ -109,6 +116,29 @@ const Merchant = mongoose.model('Merchant', merchantSchema);
 const Order = mongoose.model('Order', orderSchema);
 const Payment = mongoose.model('Payment', paymentSchema);
 const Transaction = mongoose.model('Transaction', transactionSchema);
+
+// Auditoría de transacciones
+const auditSchema = new mongoose.Schema({
+    auditId: { type: String, required: true, unique: true },
+    transactionId: { type: String, required: true },
+    usuarioEjecutor: { type: String },
+    accion: { type: String, enum: ['CREADA', 'VALIDADA', 'CONFIRMADA', 'REVERSADA'] },
+    fechaEvento: { type: Date, default: Date.now },
+    ip: { type: String },
+    dispositivo: { type: String },
+    detalle: { type: String }
+});
+const Audit = mongoose.model('Audit', auditSchema);
+
+// Conciliación
+const conciliationSchema = new mongoose.Schema({
+    conciliationId: { type: String, required: true, unique: true },
+    transactionId: { type: String, required: true },
+    fechaConciliacion: { type: Date, default: Date.now },
+    estadoConciliacion: { type: String, enum: ['PENDIENTE', 'CONCILIADO', 'ERROR'], default: 'PENDIENTE' },
+    referenciaExterna: { type: String }
+});
+const Conciliation = mongoose.model('Conciliation', conciliationSchema);
 
 function generatePaymentCode() {
     return Math.floor(10000000 + Math.random() * 90000000).toString();
@@ -381,6 +411,77 @@ app.post('/api/users/:userId/recharge', async (req, res) => {
             message: `Se recargaron $${amount} a tu cuenta Deuna`
         });
 
+    } catch (error) {
+        console.error('Error en recarga:', error);
+        res.status(500).json({ error: 'Error al procesar recarga' });
+    }
+});
+
+// ENDPOINT: Recarga (celular, billetera, interna)
+app.post('/api/recharge', async (req, res) => {
+    try {
+        const { userId, tipo, operador, numeroDestino, monto } = req.body;
+        if (!userId || !tipo || !monto || monto <= 0) {
+            return res.status(400).json({ error: 'Datos inválidos' });
+        }
+        const user = await User.findOne({ userId });
+        if (!user) {
+            return res.status(404).json({ error: 'Usuario no encontrado' });
+        }
+        // Validar saldo suficiente
+        if (user.balance < monto) {
+            return res.status(400).json({ error: 'Saldo insuficiente', currentBalance: user.balance });
+        }
+        // Simular recarga (celular, billetera, interna)
+        let estadoOperador = 'EXITOSA';
+        let codigoRespuesta = '00';
+        if (tipo === 'celular') {
+            if (!operador || !numeroDestino) {
+                return res.status(400).json({ error: 'Operador y número destino requeridos para recarga celular' });
+            }
+            // Aquí se simula llamada a API de operador
+            // Si falla: estadoOperador = 'FALLIDA'; codigoRespuesta = '99';
+        }
+        // Actualizar saldo usuario
+        const balanceBefore = user.balance;
+        user.balance -= monto;
+        user.updatedAt = new Date();
+        await user.save();
+        // Registrar transacción
+        const transId = generateId();
+        const trans = new Transaction({
+            transactionId: transId,
+            userId,
+            type: 'recharge',
+            amount: -monto,
+            balanceBefore,
+            balanceAfter: user.balance,
+            description: `Recarga ${tipo}${tipo === 'celular' ? ' a ' + numeroDestino : ''}`,
+            relatedId: null,
+            createdAt: new Date()
+        });
+        await trans.save();
+        // Registrar auditoría
+        await registrarAuditoria({
+            transactionId: transId,
+            usuarioEjecutor: userId,
+            accion: 'CREADA',
+            ip: req.ip,
+            dispositivo: req.headers['user-agent'],
+            detalle: `Recarga tipo ${tipo} por $${monto}`
+        });
+        res.json({
+            success: true,
+            userId,
+            tipo,
+            operador,
+            numeroDestino,
+            monto,
+            estadoOperador,
+            codigoRespuesta,
+            newBalance: user.balance,
+            transactionId: transId
+        });
     } catch (error) {
         console.error('Error en recarga:', error);
         res.status(500).json({ error: 'Error al procesar recarga' });
@@ -785,6 +886,121 @@ app.post('/api/seed', async (req, res) => {
     }
 });
 
+// ENDPOINT: Transferir saldo entre usuarios
+app.post('/api/transfer', async (req, res) => {
+    try {
+        const { fromUserId, toUserId, amount, description } = req.body;
+        if (!fromUserId || !toUserId || !amount || amount <= 0) {
+            return res.status(400).json({ error: 'Datos inválidos' });
+        }
+        if (fromUserId === toUserId) {
+            return res.status(400).json({ error: 'No se puede transferir a sí mismo' });
+        }
+        // Buscar usuarios
+        const fromUser = await User.findOne({ userId: fromUserId });
+        const toUser = await User.findOne({ userId: toUserId });
+        if (!fromUser || !toUser) {
+            return res.status(404).json({ error: 'Usuario origen o destino no encontrado' });
+        }
+        // Validar estado (simulación: todos activos)
+        // Validar saldo suficiente
+        if (fromUser.balance < amount) {
+            return res.status(400).json({ error: 'Saldo insuficiente', currentBalance: fromUser.balance });
+        }
+        // Validar límite diario (simulado: 1000 por día)
+        const LIMITE_DIARIO = 1000;
+        const hoy = new Date();
+        hoy.setHours(0,0,0,0);
+        const transferenciasHoy = await Transaction.aggregate([
+            { $match: { userId: fromUserId, type: 'transfer', createdAt: { $gte: hoy } } },
+            { $group: { _id: null, total: { $sum: "$amount" } } }
+        ]);
+        const totalHoy = transferenciasHoy[0]?.total || 0;
+        if ((totalHoy + amount) > LIMITE_DIARIO) {
+            return res.status(400).json({ error: 'Supera el límite diario de transferencia', limite: LIMITE_DIARIO });
+        }
+        // Comisiones (simulado: 1% mínimo 0.5)
+        const comision = Math.max(amount * 0.01, 0.5);
+        const totalDebitar = amount + comision;
+        if (fromUser.balance < totalDebitar) {
+            return res.status(400).json({ error: 'Saldo insuficiente para cubrir comisión', requerido: totalDebitar });
+        }
+        // Actualizar saldos
+        const fromBalanceBefore = fromUser.balance;
+        const toBalanceBefore = toUser.balance;
+        fromUser.balance -= totalDebitar;
+        fromUser.updatedAt = new Date();
+        toUser.balance += amount;
+        toUser.updatedAt = new Date();
+        await fromUser.save();
+        await toUser.save();
+        // Registrar transacción origen
+        const transId = generateId();
+        const transOrigen = new Transaction({
+            transactionId: transId,
+            userId: fromUserId,
+            type: 'transfer',
+            amount: -totalDebitar,
+            balanceBefore: fromBalanceBefore,
+            balanceAfter: fromUser.balance,
+            description: description || `Transferencia a ${toUser.name}`,
+            relatedId: toUserId,
+            createdAt: new Date()
+        });
+        await transOrigen.save();
+        // Registrar transacción destino
+        const transDestino = new Transaction({
+            transactionId: generateId(),
+            userId: toUserId,
+            type: 'transfer',
+            amount: amount,
+            balanceBefore: toBalanceBefore,
+            balanceAfter: toUser.balance,
+            description: description || `Transferencia recibida de ${fromUser.name}`,
+            relatedId: fromUserId,
+            createdAt: new Date()
+        });
+        await transDestino.save();
+        // Registrar auditoría
+        await registrarAuditoria({
+            transactionId: transId,
+            usuarioEjecutor: fromUserId,
+            accion: 'CREADA',
+            ip: req.ip,
+            dispositivo: req.headers['user-agent'],
+            detalle: `Transferencia de ${fromUserId} a ${toUserId} por $${amount}`
+        });
+        res.json({
+            success: true,
+            fromUserId,
+            toUserId,
+            amount,
+            comision,
+            totalDebitado: totalDebitar,
+            newFromBalance: fromUser.balance,
+            newToBalance: toUser.balance,
+            transactionId: transId
+        });
+    } catch (error) {
+        console.error('Error en transferencia:', error);
+        res.status(500).json({ error: 'Error al procesar transferencia' });
+    }
+});
+
+// Función para registrar auditoría
+async function registrarAuditoria({ transactionId, usuarioEjecutor, accion, ip, dispositivo, detalle }) {
+    const audit = new Audit({
+        auditId: generateId(),
+        transactionId,
+        usuarioEjecutor,
+        accion,
+        ip,
+        dispositivo,
+        detalle
+    });
+    await audit.save();
+}
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
@@ -797,6 +1013,7 @@ app.listen(PORT, () => {
     console.log(`   GET  /api/bank/transactions - Ver transacciones del banco`);
     console.log(`   POST /api/users/create - Crear usuario (descuenta del banco)`);
     console.log(`   POST /api/users/:userId/recharge - Recargar saldo (descuenta del banco)`);
+    console.log(`   POST /api/transfer - Transferir saldo entre usuarios`);
 });
 
 module.exports = app;

@@ -17,6 +17,10 @@ export default function ClientApp() {
 
   const [rechargeAmount, setRechargeAmount] = useState('');
   const [transactions, setTransactions] = useState([]);
+  const [transferTo, setTransferTo] = useState('');
+  const [transferAmount, setTransferAmount] = useState('');
+  const [transferDesc, setTransferDesc] = useState('');
+  const [transferResult, setTransferResult] = useState(null);
 
   useEffect(() => {
     const savedUser = localStorage.getItem('deuna_user');
@@ -214,6 +218,46 @@ export default function ClientApp() {
     setView('login');
   };
 
+  // --- TRANSFERENCIA ENTRE USUARIOS ---
+  const handleTransfer = async () => {
+    setError('');
+    setTransferResult(null);
+    const amount = parseFloat(transferAmount);
+    if (!transferTo || !amount || amount <= 0) {
+      setError('Completa todos los campos');
+      return;
+    }
+    if (transferTo === user.userId) {
+      setError('No puedes transferirte a ti mismo');
+      return;
+    }
+    try {
+      const response = await fetch(`${API_URL}/transfer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fromUserId: user.userId,
+          toUserId: transferTo,
+          amount,
+          description: transferDesc
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setUser({ ...user, balance: data.newFromBalance });
+        localStorage.setItem('deuna_user', JSON.stringify({ ...user, balance: data.newFromBalance }));
+        setTransferResult(data);
+        setTransferAmount('');
+        setTransferTo('');
+        setTransferDesc('');
+      } else {
+        setError(data.error || 'Error en la transferencia');
+      }
+    } catch (err) {
+      setError('Error de conexión con el servidor');
+    }
+  };
+
   // ============ VISTA LOGIN ============
   if (view === 'login') {
     return (
@@ -325,7 +369,6 @@ export default function ClientApp() {
               <p className="text-white font-medium text-sm">Recargar</p>
               <p className="text-gray-500 text-xs mt-1">Agregar fondos</p>
             </button>
-
             <button
               onClick={loadTransactions}
               className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 hover:border-cyan-500/50 transition-all group"
@@ -335,6 +378,16 @@ export default function ClientApp() {
               </div>
               <p className="text-white font-medium text-sm">Historial</p>
               <p className="text-gray-500 text-xs mt-1">Ver actividad</p>
+            </button>
+            <button
+              onClick={() => setView('transfer')}
+              className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4 hover:border-fuchsia-500/50 transition-all group col-span-2"
+            >
+              <div className="w-12 h-12 bg-fuchsia-500/10 rounded-xl flex items-center justify-center mb-3 group-hover:bg-fuchsia-500/20 transition-colors">
+                <ArrowRight className="w-6 h-6 text-fuchsia-500" />
+              </div>
+              <p className="text-white font-medium text-sm">Transferir</p>
+              <p className="text-gray-500 text-xs mt-1">A otro usuario</p>
             </button>
           </div>
 
@@ -619,6 +672,74 @@ export default function ClientApp() {
               </button>
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  // ============ VISTA TRANSFERENCIA ============
+  if (view === 'transfer') {
+    return (
+      <div className="min-h-screen bg-black">
+        <div className="max-w-md mx-auto p-6">
+          <button onClick={() => setView('home')} className="text-gray-400 hover:text-white mb-6 flex items-center gap-2">
+            ← Volver
+          </button>
+          <h2 className="text-3xl font-bold text-white mb-2">Transferir</h2>
+          <p className="text-gray-400 mb-6">Envía dinero a otro usuario</p>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6 mb-6">
+            <p className="text-gray-400 text-sm mb-1">Saldo actual</p>
+            <p className="text-white text-3xl font-bold">${user.balance.toFixed(2)}</p>
+          </div>
+          <div className="mb-4">
+            <label className="block text-gray-300 text-sm font-medium mb-2">ID de usuario destino</label>
+            <input
+              type="text"
+              value={transferTo}
+              onChange={e => setTransferTo(e.target.value)}
+              className="w-full px-4 py-4 bg-zinc-900 border border-zinc-800 text-white rounded-2xl focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
+              placeholder="ID destino"
+            />
+          </div>
+          <div className="mb-4">
+            <label className="block text-gray-300 text-sm font-medium mb-2">Monto a transferir</label>
+            <input
+              type="number"
+              step="0.01"
+              value={transferAmount}
+              onChange={e => setTransferAmount(e.target.value)}
+              className="w-full px-4 py-4 bg-zinc-900 border border-zinc-800 text-white rounded-2xl focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
+              placeholder="0.00"
+            />
+          </div>
+          <div className="mb-4">
+            <label className="block text-gray-300 text-sm font-medium mb-2">Descripción (opcional)</label>
+            <input
+              type="text"
+              value={transferDesc}
+              onChange={e => setTransferDesc(e.target.value)}
+              className="w-full px-4 py-4 bg-zinc-900 border border-zinc-800 text-white rounded-2xl focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
+              placeholder="Motivo de la transferencia"
+            />
+          </div>
+          {error && (
+            <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 mb-4">
+              <p className="text-sm text-red-400">{error}</p>
+            </div>
+          )}
+          {transferResult && (
+            <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-xl p-3 mb-4">
+              <p className="text-sm text-emerald-400 font-bold mb-1">¡Transferencia exitosa!</p>
+              <p className="text-sm text-emerald-300">Transferiste ${transferResult.amount} a {transferResult.toUserId}.</p>
+              <p className="text-xs text-gray-400 mt-1">Comisión: ${transferResult.comision.toFixed(2)} | Nuevo saldo: ${transferResult.newFromBalance.toFixed(2)}</p>
+            </div>
+          )}
+          <button
+            onClick={handleTransfer}
+            className="w-full bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 text-white font-semibold py-4 rounded-2xl transition-all transform hover:scale-[1.02] active:scale-[0.98]"
+          >
+            Confirmar Transferencia
+          </button>
         </div>
       </div>
     );
